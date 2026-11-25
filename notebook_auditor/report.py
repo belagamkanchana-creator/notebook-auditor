@@ -42,6 +42,12 @@ def render_markdown(result: AuditResult, nb: Optional[Notebook] = None) -> str:
     add("> Cell numbers are 1-based positions in the notebook (Cell 1 = first cell, markdown included).")
     add("")
 
+    # ---------------------------------------------------------------- findings & gaps
+    if result.findings:
+        _render_findings(result, add)
+    if result.gaps:
+        _render_gaps(result, add)
+
     # ---------------------------------------------------------------- summary
     add("## Summary")
     add("")
@@ -64,6 +70,9 @@ def render_markdown(result: AuditResult, nb: Optional[Notebook] = None) -> str:
     # ---------------------------------------------------------------- claims table
     add("## Claim Verdicts")
     add("")
+    if not result.claims:
+        add("_No written claims were checked. Add slides, a paper draft or notes (or text cells in the notebook) to check them against the outputs._")
+        add("")
     add("| ID | Claim | Category | Verdict | Strength | Evidence cells |")
     add("|---|---|---|---|---|---|")
     for c in result.claims:
@@ -155,6 +164,10 @@ def render_markdown(result: AuditResult, nb: Optional[Notebook] = None) -> str:
         referenced |= set(p.target_cells)
     for r in result.risks:
         referenced |= set(r.cell_indices)
+    for f in result.findings:
+        referenced |= set(f.cells)
+    for g in result.gaps:
+        referenced |= set(g.cells)
     if nb is not None and referenced:
         add("## Evidence Appendix")
         add("")
@@ -186,6 +199,68 @@ def render_markdown(result: AuditResult, nb: Optional[Notebook] = None) -> str:
             add(f"- {w}")
         add("")
     return "\n".join(lines)
+
+
+TRUST_LABEL = {
+    "solid": "✅ Solid",
+    "at_risk": "⚠️ At risk",
+    "unconfirmed": "❔ Unconfirmed",
+    "visual": "👁️ Read from figure",
+}
+BASIS_LABEL = {
+    "MEASURED": "printed by the notebook",
+    "DERIVED": "worked out from printed values",
+    "CODE": "typed into the plotting code",
+    "VISUAL": "read from a figure by Claude",
+    "INTERPRETATION": "an interpretation by Claude",
+}
+
+
+def _render_findings(result: AuditResult, add) -> None:
+    by_trust = result.summary()["findings_by_trust"]
+    add("## What your notebook found")
+    add("")
+    drafted = "Claude and the offline checks" if any(f.source == "llm" for f in result.findings) else "the saved outputs"
+    add(f"_Drafted automatically from {drafted}. Every finding links to its cell; **Trust** says how far to rely on it._ "
+        + " · ".join(f"{TRUST_LABEL[t]}: {n}" for t, n in by_trust.items() if n))
+    add("")
+    add("| # | Finding | Where | Trust |")
+    add("|---|---|---|---|")
+    for i, f in enumerate(result.findings, start=1):
+        add(f"| [{i}](#{f.finding_id.lower()}) | {_esc(f.text, 160)} | {_cells_links(f.cells)} | {TRUST_LABEL.get(f.trust, f.trust)} |")
+    add("")
+    for i, f in enumerate(result.findings, start=1):
+        add(f'<a id="{f.finding_id.lower()}"></a>')
+        add(f"**{i}. {_esc(f.text)}**  ")
+        add(f"{TRUST_LABEL.get(f.trust, f.trust)} · {BASIS_LABEL.get(f.basis, f.basis)} · {_cells_links(f.cells)}")
+        shown = set()
+        for e in f.evidence[:3]:
+            if e.snippet and (e.cell_index, e.snippet) not in shown:
+                shown.add((e.cell_index, e.snippet))
+                add(f"- Evidence ({_cell_link(e.cell_index)} {e.location}): `{_esc(e.snippet, 160)}`")
+        for c in f.caveats:
+            add(f"- ⚑ {c}")
+        add("")
+
+
+def _render_gaps(result: AuditResult, add) -> None:
+    add("## What's missing")
+    add("")
+    add("_Next steps that would make the results more trustworthy, most important first._")
+    add("")
+    for i, g in enumerate(result.gaps, start=1):
+        where = f" ({_cells_links(g.cells)})" if g.cells else ""
+        add(f"### {i}. {g.title} {SEV_ICON.get(g.severity, '')}")
+        add("")
+        add(f"{g.why}{where}")
+        add("")
+        if "\n" in g.how or "(" in g.how and "=" in g.how:
+            add("```python")
+            add(g.how)
+            add("```")
+        else:
+            add(g.how)
+        add("")
 
 
 def write_reports(result: AuditResult, output_dir: str, nb: Optional[Notebook] = None, formats: Sequence[str] = ("md", "json")) -> Dict[str, str]:

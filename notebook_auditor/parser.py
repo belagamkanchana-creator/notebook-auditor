@@ -148,7 +148,7 @@ def image_info(mime: str, payload: Any) -> ImageInfo:
             w, h = _jpeg_size(raw)
     except struct.error:
         pass
-    return ImageInfo(mime, len(raw), w, h)
+    return ImageInfo(mime, len(raw), w, h, data=data.replace("\n", ""))
 
 
 # --------------------------------------------------------------------------- outputs & cells

@@ -30,6 +30,9 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=None, help="Model name for the provider (default per provider)")
     run.add_argument("--include-notebook-markdown", action="store_true",
                      help="Also extract claims from the notebook's markdown cells (default when no --slides given)")
+    run.add_argument("--findings", dest="findings", action="store_true", default=None,
+                     help="Draft 'what the notebook found' with trust ratings (default: on when no --slides are given)")
+    run.add_argument("--no-findings", dest="findings", action="store_false", help="Only check claims; skip drafting findings")
     run.add_argument("--threshold-tolerance", type=float, default=0.005, help="Borderline window around α / metric thresholds (default 0.005)")
     run.add_argument("--format", choices=["md", "json", "both"], default="both")
     run.add_argument("--fail-on", choices=["none", "contradicted", "risk", "any"], default="none",
@@ -55,7 +58,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if not args.quiet:
         mode = f"LLM agents via {llm.label}" if llm else "heuristic agents (no LLM)"
         print(f"Auditing {args.notebook} · {len(nb.cells)} cells · {len(claims)} claims · {mode}", file=sys.stderr)
-    result = AuditPipeline(llm, args.threshold_tolerance).run(nb, claims, args.slides, warnings)
+    findings = args.findings if args.findings is not None else not args.slides
+    result = AuditPipeline(llm, args.threshold_tolerance, findings=findings).run(nb, claims, args.slides, warnings)
     formats = ("md", "json") if args.format == "both" else (args.format,)
     paths = write_reports(result, args.output_dir, nb, formats)
     if llm is not None and llm.calls and not llm.successes:
@@ -64,6 +68,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if not args.quiet:
         print(f"  mode: {result.mode}")
         s = result.summary()
+        if result.findings:
+            t = s["findings_by_trust"]
+            print(f"  findings: {s['findings']} ({t['solid']} solid, {t['at_risk']} at risk, {t['unconfirmed'] + t['visual']} unconfirmed) · next steps: {s['gaps']}")
         print("  " + "  ".join(f"{VERDICT_ICON[v]} {v}: {s['verdicts'][v]}" for v in VERDICTS))
         print("  findings: " + ", ".join(f"{k}={v}" for k, v in s["risks_by_severity"].items()))
         for kind, path in paths.items():

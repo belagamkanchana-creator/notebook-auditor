@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set
 
-from ..code_analysis import CallEvent, CodeIndex, literal_list, literal_number
+from ..code_analysis import CallEvent, CodeIndex, literal_list, literal_number, literal_strings
 from ..models import Claim, Notebook, RiskFinding, SeriesEvidence
 from ..textnum import BOUNDED_KINDS, content_tokens, kinds_of_text, series_direction
 
@@ -20,6 +21,16 @@ BAR_ATTRS = {"bar", "barh", "barplot", "countplot"}
 LINE_ATTRS = {"plot", "lineplot", "semilogy", "semilogx", "loglog", "step", "errorbar"}
 DIMRED_RE = re.compile(r"\b(TSNE|UMAP|umap\.UMAP|PCA|Isomap|MDS)\b")
 FIGURE_REF_RE = re.compile(r"\b(figure|fig\.?|plot|chart|graph|visuali[sz]ation|t-?sne|umap|heatmap|curve|scatter)\b", re.I)
+
+
+@dataclass
+class BarData:
+    """Categories and values typed literally into a bar chart's code."""
+
+    cell_index: int
+    categories: List[str]
+    values: List[float]
+    label: str
 
 
 def _is_plot_call(c: CallEvent) -> bool:
@@ -39,6 +50,7 @@ class FigureAuditor:
         self.idx = index
         self.claims = list(claims)
         self.series: List[SeriesEvidence] = []
+        self.bars: List[BarData] = []
         self.plot_cells: Dict[int, List[CallEvent]] = {}
         for c in index.calls:
             if _is_plot_call(c):
@@ -113,6 +125,13 @@ class FigureAuditor:
                           "The saved notebook has no rendered figure for this plot, so figure-based claims cannot be checked visually."))
         # literal data -> series
         for p in plots:
+            if p.attr in ("bar", "barh") and len(p.arg_nodes) >= 2:
+                cats = literal_strings(p.arg_nodes[0])
+                if cats is None and hasattr(p.arg_nodes[0], "id") and p.arg_nodes[0].id in self.idx.string_lists:
+                    cats = self.idx.string_lists[p.arg_nodes[0].id][1]
+                vals = self._resolve_list(p.arg_nodes[1])
+                if cats and vals and len(cats) == len(vals):
+                    self.bars.append(BarData(cell_i, cats, vals, ylabel or title or (p.args[1] if len(p.args) > 1 else "value")))
             if p.attr not in LINE_ATTRS:  # bars/scatters are not ordered series, so no trend
                 continue
             if not p.arg_nodes or p.receiver == "sns":
@@ -121,11 +140,14 @@ class FigureAuditor:
             values = resolved[1] if len(resolved) >= 2 else resolved[0]  # plot(x, y) or plot(y)
             if not values or len(values) < 2:
                 continue
+            if len(resolved) >= 2 and resolved[0] == values:
+                continue  # a y = x reference line, not data
             d, mono = series_direction(values)
             label_kw = p.kwargs.get("label", "").strip("'\"")
             y_src = p.args[1] if len(p.args) >= 2 else p.args[0]
             label = " ".join(x for x in (label_kw, ylabel, title) if x) or y_src
-            self.series.append(SeriesEvidence(cell_i, label, values, d, mono, "plot_literal"))
+            name = label_kw or ylabel or title or y_src
+            self.series.append(SeriesEvidence(cell_i, label, values, d, mono, "plot_literal", name))
         return out
 
     def _resolve_list(self, node) -> Optional[List[float]]:

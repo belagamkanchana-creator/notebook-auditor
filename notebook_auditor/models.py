@@ -17,6 +17,7 @@ class ImageInfo:
     size_bytes: int
     width: Optional[int] = None
     height: Optional[int] = None
+    data: Optional[str] = field(default=None, repr=False)  # base64 payload, used only for LLM figure reading
 
     def describe(self) -> str:
         dims = f" {self.width}x{self.height}" if self.width and self.height else ""
@@ -160,6 +161,7 @@ class Observation:
     line: str
     order: int = 0
     source: str = "heuristic"  # heuristic | llm
+    row_key: str = ""  # table row this value sits in, e.g. "LogReg" or "max_depth = 8"
 
 
 @dataclass
@@ -188,6 +190,7 @@ class SeriesEvidence:
     direction: Optional[str]
     monotonic: bool
     source: str  # output | plot_literal
+    name: str = ""  # short display name (legend label or y-axis label)
 
 
 @dataclass
@@ -236,6 +239,33 @@ class ClaimVerdict:
 
 
 @dataclass
+class Finding:
+    """Something the notebook's outputs show, drafted automatically, with a trust rating."""
+
+    finding_id: str
+    text: str
+    kind: str  # data | metric | trend | overfitting | comparison | significance | figure | interpretation
+    basis: str  # MEASURED | DERIVED | VISUAL | INTERPRETATION
+    cells: List[int]
+    evidence: List[EvidenceItem] = field(default_factory=list)
+    trust: str = "solid"  # solid | at_risk | unconfirmed | visual
+    caveats: List[str] = field(default_factory=list)
+    risk_ids: List[str] = field(default_factory=list)
+    source: str = "heuristic"  # heuristic | llm
+
+
+@dataclass
+class Gap:
+    """Something missing from the analysis, with a concrete next step."""
+
+    title: str
+    why: str
+    how: str  # short code snippet or instruction
+    severity: str  # high | medium | low
+    cells: List[int] = field(default_factory=list)
+
+
+@dataclass
 class AuditResult:
     notebook_path: str
     artifact_paths: List[str]
@@ -249,6 +279,8 @@ class AuditResult:
     risks: List[RiskFinding]
     evidence_map: List[Dict[str, Any]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    findings: List[Finding] = field(default_factory=list)
+    gaps: List[Gap] = field(default_factory=list)
 
     def verdict_for(self, claim_id: str) -> Optional[ClaimVerdict]:
         return next((v for v in self.verdicts if v.claim_id == claim_id), None)
@@ -263,7 +295,10 @@ class AuditResult:
         sev = {s: 0 for s in SEVERITIES}
         for r in self.risks:
             sev[r.severity] = sev.get(r.severity, 0) + 1
-        return {"claims": len(self.claims), "verdicts": counts, "risks_by_severity": sev}
+        trust = {t: 0 for t in ("solid", "at_risk", "unconfirmed", "visual")}
+        for f in self.findings:
+            trust[f.trust] = trust.get(f.trust, 0) + 1
+        return {"claims": len(self.claims), "verdicts": counts, "risks_by_severity": sev, "findings": len(self.findings), "findings_by_trust": trust, "gaps": len(self.gaps)}
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)

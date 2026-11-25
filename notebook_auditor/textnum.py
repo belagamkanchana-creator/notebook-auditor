@@ -15,8 +15,13 @@ _TOKEN_RE = re.compile(r"[a-z0-9²α]+")
 _FSCORE_RE = re.compile(r"\bf[-_ ]?(?:1|score|measure)\b", re.I)
 
 
+_PVALUE_RE = re.compile(r"\bp[-_ ]?val(?:ue)?s?\b|\bp\s*(?=[=<>≤])", re.I)
+
+
 def tokenize(text: str) -> List[str]:
     text = _FSCORE_RE.sub(" f1 ", text)
+    # A bare "p" is only a p-value in "p = 0.04", "p < .05" or "p-value"; "P(→L2 | L1)" is a probability.
+    text = _PVALUE_RE.sub(" pvalue ", text)
     return _TOKEN_RE.findall(text.lower())
 
 
@@ -39,7 +44,7 @@ METRIC_SYNONYMS = {
     "mse": {"mse"},
     "mae": {"mae"},
     "r2": {"r2", "r²", "rsquared"},
-    "p_value": {"p", "pvalue", "pval", "pvalues"},
+    "p_value": {"pvalue", "pval", "pvalues"},
     "correlation": {"correlation", "corr", "pearson", "spearman", "rho"},
     "count": {
         "documents", "document", "docs", "doc", "rows", "row", "samples", "sample", "records", "examples",
@@ -167,7 +172,8 @@ def extract_numbers(text: str, exclude_refs: bool = False) -> List[NumberMention
             qualifier = "gt"
         elif any(lead.rstrip().endswith(p) for p in LT_PHRASES) or lead.rstrip().endswith("<"):
             qualifier = "lt"
-        kinds, quals = nearest_kinds(before, after)
+        # A label never reaches across a list separator: in "t = 2.31, p = 0.04" the "p" belongs to 0.04 only.
+        kinds, quals = nearest_kinds(re.split(r"[,;|]", before)[-1], re.split(r"[,;=:|(]", after)[0])
         mentions.append(
             NumberMention(
                 raw=m.group(0).strip(),

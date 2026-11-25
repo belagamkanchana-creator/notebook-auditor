@@ -209,22 +209,7 @@ class RiskAuditor:
         return out
 
     def _majority_rate(self) -> Optional[Tuple[float, int]]:
-        """Majority-class share from a printed value_counts() of a label-like column."""
-        label_like = re.compile(r"(label|target|class|sentiment|category|y)\b[^\n]*value_counts|y\w*\.value_counts", re.I)
-        for cell in self.nb.code_cells:
-            if not label_like.search(cell.source_code):
-                continue
-            for out in cell.outputs:
-                block: List[float] = []
-                for line in out.text.splitlines() + [""]:
-                    m = re.match(r"^\s*[^\s\d][^:]*?\s+(\d+(?:\.\d+)?)\s*$", line)
-                    if m and not re.match(r"^\s*(Name|dtype|Length)\b", line):
-                        block.append(float(m.group(1)))
-                        continue
-                    if len(block) >= 2 and sum(block) > 0:
-                        return max(block) / sum(block), cell.cell_index
-                    block = []
-        return None
+        return majority_rate(self.nb)
 
     # ------------------------------------------------------------------ thresholds
     def _alphas(self) -> List[Tuple[float, str, Optional[int]]]:
@@ -341,3 +326,24 @@ class RiskAuditor:
         if self.idx.parse_errors:
             out.append(_f("unparsed_cells", "info", "Some code cells could not be parsed; leakage checks for them used regex only", self.idx.parse_errors))
         return out
+
+
+def majority_rate(nb: Notebook) -> Optional[Tuple[float, int]]:
+    """Majority-class share from a printed value_counts() of a label-like column."""
+    label_like = re.compile(r"(label|target|class|sentiment|category|y)\b[^\n]*value_counts|y\w*\.value_counts", re.I)
+    for cell in nb.code_cells:
+        if not label_like.search(cell.source_code):
+            continue
+        for out in cell.outputs:
+            block: List[float] = []
+            for line in out.text.splitlines() + [""]:
+                parts = line.rsplit(None, 1)  # "positive    252" -> ["positive", "252"]; linear, no regex backtracking
+                head = parts[0].strip() if len(parts) == 2 else ""
+                if (head and not head[0].isdigit() and ":" not in head and re.fullmatch(r"\d+(?:\.\d+)?", parts[1])
+                        and not re.match(r"(Name|dtype|Length)\b", head)):
+                    block.append(float(parts[1]))
+                    continue
+                if len(block) >= 2 and sum(block) > 0:
+                    return max(block) / sum(block), cell.cell_index
+                block = []
+    return None

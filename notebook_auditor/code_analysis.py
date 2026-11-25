@@ -73,6 +73,12 @@ def literal_list(node: ast.AST) -> Optional[List[float]]:
     return None
 
 
+def literal_strings(node: ast.AST) -> Optional[List[str]]:
+    if isinstance(node, (ast.List, ast.Tuple)) and node.elts and all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return [e.value for e in node.elts]  # type: ignore[attr-defined]
+    return None
+
+
 @dataclass
 class CallEvent:
     cell_index: int
@@ -122,6 +128,7 @@ class CodeIndex:
         self.assigns: List[AssignEvent] = []
         self.var_class: Dict[str, Tuple[str, Tuple[int, int, int]]] = {}
         self.literal_lists: Dict[str, Tuple[int, List[float]]] = {}
+        self.string_lists: Dict[str, Tuple[int, List[str]]] = {}
         self.numeric_assigns: List[Tuple[int, int, str, float]] = []  # (cell, line, name, value)
         self.compares: List[Tuple[int, int, str, str, float]] = []  # (cell, line, left_src, op, constant)
         self.parse_errors: List[int] = []
@@ -160,6 +167,10 @@ class CodeIndex:
                 if lst is not None:
                     for n in names:
                         self.literal_lists[n] = (idx, lst)
+                strs = literal_strings(value)
+                if strs is not None:
+                    for n in names:
+                        self.string_lists[n] = (idx, strs)
                 num = literal_number(value)
                 if num is not None:
                     for n in names:

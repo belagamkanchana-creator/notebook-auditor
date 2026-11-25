@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -49,12 +49,21 @@ class LLMClient:
     def complete(self, system: str, user: str, max_tokens: int = 2000) -> str:  # pragma: no cover - abstract
         raise NotImplementedError
 
-    def complete_json(self, system: str, user: str, max_tokens: int = 2000) -> Any:
+    def complete_vision(self, system: str, user: str, images: List[Tuple[str, str, str]], max_tokens: int = 2000) -> str:
+        """Images are (caption, mime, base64). Providers without vision get the text only."""
+        captions = "\n".join(f"[{cap}: image not shown to this model]" for cap, _, _ in images)
+        return self.complete(system, f"{user}\n\n{captions}", max_tokens)
+
+    def complete_json(self, system: str, user: str, max_tokens: int = 2000, images: Optional[List[Tuple[str, str, str]]] = None) -> Any:
         if self.disabled:
             return None
         self.calls += 1
         try:
-            text = self.complete(system + "\nRespond with a single JSON object and nothing else.", user, max_tokens)
+            sys_prompt = system + "\nRespond with a single JSON object and nothing else."
+            if images:
+                text = self.complete_vision(sys_prompt, user, images, max_tokens)
+            else:
+                text = self.complete(sys_prompt, user, max_tokens)
         except Exception as exc:  # network / auth / rate limit: degrade to heuristics
             msg = f"{self.provider} call failed: {type(exc).__name__}: {exc}"
             log.warning(msg)
@@ -106,6 +115,24 @@ class AnthropicClient(LLMClient):
         )
         return "".join(getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text")
 
+    def complete_vision(self, system: str, user: str, images: List[Tuple[str, str, str]], max_tokens: int = 2000) -> str:
+        content: List[dict] = []
+        for caption, mime, b64 in images:
+            content.append({"type": "text", "text": caption})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}})
+        content.append({"type": "text", "text": user})
+        resp = self._client.messages.create(model=self.model, max_tokens=max_tokens, system=system, messages=[{"role": "user", "content": content}])
+        return "".join(getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text")
+
+
+def _openai_style_vision(user: str, images: List[Tuple[str, str, str]]) -> List[dict]:
+    content: List[dict] = []
+    for caption, mime, b64 in images:
+        content.append({"type": "text", "text": caption})
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+    content.append({"type": "text", "text": user})
+    return content
+
 
 class OpenAIClient(LLMClient):
     provider = "openai"
@@ -125,6 +152,15 @@ class OpenAIClient(LLMClient):
         )
         return resp.choices[0].message.content or ""
 
+    def complete_vision(self, system: str, user: str, images: List[Tuple[str, str, str]], max_tokens: int = 2000) -> str:
+        resp = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": _openai_style_vision(user, images)}],
+        )
+        return resp.choices[0].message.content or ""
+
 
 class LiteLLMClient(LLMClient):
     provider = "litellm"
@@ -140,6 +176,14 @@ class LiteLLMClient(LLMClient):
             model=self.model,
             max_tokens=max_tokens,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        )
+        return resp.choices[0].message.content or ""
+
+    def complete_vision(self, system: str, user: str, images: List[Tuple[str, str, str]], max_tokens: int = 2000) -> str:
+        resp = self._litellm.completion(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": _openai_style_vision(user, images)}],
         )
         return resp.choices[0].message.content or ""
 

@@ -17,6 +17,7 @@ from .auditors.figure_auditor import FIGURE_REF_RE, FigureAuditor
 from .auditors.risk_auditor import RiskAuditor
 from .claim_extractor import extract_claims
 from .code_analysis import CodeIndex
+from .findings import FindingsBuilder, build_gaps
 from .llm import LLMClient, make_client
 from .models import (
     AuditResult,
@@ -342,9 +343,28 @@ def _assign_ids(findings: List[RiskFinding], prefix: str, start: int = 1) -> Non
 
 
 class AuditPipeline:
-    def __init__(self, llm: Optional[LLMClient] = None, threshold_tolerance: float = 0.005) -> None:
+    def __init__(self, llm: Optional[LLMClient] = None, threshold_tolerance: float = 0.005, findings: bool = False) -> None:
         self.llm = llm
         self.tol = threshold_tolerance
+        self.findings = findings
+
+    def _build_findings(self, nb, index, observations, figures, risks, planner, executor, verifier, warnings):
+        builder = FindingsBuilder(nb, index, observations, figures, risks)
+        findings = builder.build()
+        if self.llm is not None:
+            for f, claim in builder.llm_candidates(self.llm, findings):
+                claim.claim_id = f"LF{len(findings) + 1}"
+                plan = planner.heuristic_plan(claim)
+                plan.target_cells = sorted(set(plan.target_cells) | set(f.cells))  # always look at the cited cell
+                ex = executor.execute(claim, plan)
+                v = verifier.verify(claim, plan, ex)
+                if builder.accept_llm(f, v):
+                    findings.append(f)
+        for i, f in enumerate(findings, start=1):
+            f.finding_id = f"FD{i}"
+            builder.rate(f)
+        warnings += builder.warnings
+        return findings, build_gaps(nb, index, risks, observations, figures)
 
     def run(self, nb: Notebook, claims: List[Claim], artifact_paths: Sequence[str] = (), warnings: Optional[List[str]] = None) -> AuditResult:
         warnings = list(warnings or [])
@@ -365,6 +385,9 @@ class AuditPipeline:
         plans = planner.plan(claims)
         executions = [executor.execute(c, p) for c, p in zip(claims, plans)]
         verdicts = [verifier.verify(c, p, e) for c, p, e in zip(claims, plans, executions)]
+        findings, gaps = ([], [])
+        if self.findings:
+            findings, gaps = self._build_findings(nb, index, observations, figures, pre_risks, planner, executor, verifier, warnings)
 
         strength_findings = ClaimStrengthAuditor().run(claims, executions, verdicts)
         evidence = EvidenceAuditor()
@@ -393,6 +416,8 @@ class AuditPipeline:
             risks=all_risks,
             evidence_map=evidence.build_map(claims, verdicts, executions),
             warnings=warnings,
+            findings=findings,
+            gaps=gaps,
         )
 
 
@@ -404,11 +429,17 @@ def run_audit(
     include_notebook_markdown: Optional[bool] = None,
     threshold_tolerance: float = 0.005,
     llm: Optional[LLMClient] = None,
+    findings: Optional[bool] = None,
 ) -> AuditResult:
-    """End-to-end audit. With no API key (or provider='none') it runs fully offline."""
+    """End-to-end audit. With no API key (or provider='none') it runs fully offline.
+
+    ``findings`` drafts "what the notebook found"; by default it is on when no write-up is given.
+    """
     nb = load_notebook(notebook_path)
     client = llm if llm is not None else make_client(provider, model)
     if include_notebook_markdown is None:
         include_notebook_markdown = not artifact_paths
+    if findings is None:
+        findings = not artifact_paths
     claims, warnings = extract_claims(list(artifact_paths), nb, include_notebook_markdown, llm=client)
-    return AuditPipeline(client, threshold_tolerance).run(nb, claims, artifact_paths, warnings)
+    return AuditPipeline(client, threshold_tolerance, findings=findings).run(nb, claims, artifact_paths, warnings)

@@ -25,6 +25,7 @@ from ..models import (
     SeriesEvidence,
 )
 from ..textnum import (
+    BOUNDED_KINDS,
     comparable,
     content_tokens,
     extract_numbers,
@@ -54,11 +55,14 @@ def _print_lines(src: str) -> List[str]:
     return [l.strip() for l in src.splitlines() if re.search(r"\bprint\s*\(", l)]
 
 
-def _mk_obs(cell: Cell, m: NumberMention, label: str, line: str, location: str = "output", kinds=None, quals=None) -> Observation:
+def _mk_obs(cell: Cell, m: NumberMention, label: str, line: str, location: str = "output", kinds=None, quals=None, row_key: str = "") -> Observation:
     if kinds is None:
         kinds = set(m.kinds)
     if quals is None:
         quals = set(m.qualifiers)
+    kinds = set(kinds)
+    if kinds & BOUNDED_KINDS and not _plausible_bounded(m):
+        kinds -= BOUNDED_KINDS  # "accuracy ... 1692" is a support count, not an accuracy
     return Observation(
         cell_index=cell.cell_index,
         location=location,
@@ -70,7 +74,13 @@ def _mk_obs(cell: Cell, m: NumberMention, label: str, line: str, location: str =
         kinds=sorted(kinds),
         qualifiers=sorted(quals),
         line=line.strip()[:200],
+        row_key=row_key,
     )
+
+
+def _plausible_bounded(m: NumberMention) -> bool:
+    """Accuracy/F1/... are in [0, 1], or a percentage."""
+    return m.is_percent or 0 <= m.value <= 1 or (1 < m.value <= 100 and m.decimals >= 1)
 
 
 def _table_observations(cell: Cell, table: List[List[str]]) -> List[Observation]:
@@ -81,15 +91,19 @@ def _table_observations(cell: Cell, table: List[List[str]]) -> List[Observation]
     for row in table[1:]:
         if not row:
             continue
-        row_label = row[0]
+        # Name the row by its first text cell: a DataFrame's index is often just 0, 1, 2 while a "model" column says what the row is.
+        name_j = next((j for j, v in enumerate(row) if re.search(r"[A-Za-z]{2,}", v) and v.lower() != "nan"), 0)
+        row_label = row[name_j]
         offset = len(header) - len(row)
         for j, value in enumerate(row[1:], start=1):
+            if j == name_j:
+                continue
             hj = j + offset if 0 <= j + offset < len(header) else None
             col = header[hj] if hj is not None else ""
             for m in extract_numbers(value):
                 label = f"{row_label} {col}"
                 toks = tokenize(label)
-                obs.append(_mk_obs(cell, m, label, f"{row_label} | {col} = {value}", kinds=kinds_of_text(label), quals=qualifiers_of_tokens(toks)))
+                obs.append(_mk_obs(cell, m, label, f"{row_label} | {col} = {value}", kinds=kinds_of_text(label), quals=qualifiers_of_tokens(toks), row_key=row_label))
     return obs
 
 
@@ -131,17 +145,25 @@ def observations_for_cell(cell: Cell) -> List[Observation]:
             shape = re.fullmatch(r"\s*\(?\s*(\d+)\s*,\s*(\d+)\s*\)?\s*", line)
             is_shape = bool(shape) and "shape" in (bare_label or line).lower()
             prev_label = ""
+            in_table = bool(header_cols) and len(mentions) >= 2
+            row_key = ""
+            if in_table:
+                row_label = line[: mentions[0].start].strip()
+                first_col = len(header_cols) - len(mentions)
+                if _LETTERS_RE.search(row_label):
+                    row_key = row_label  # "LogReg  0.85  0.80" -> row "LogReg"
+                elif 0 <= first_col < len(header_cols) and not kinds_of_text(header_cols[first_col]) - {"epochs"}:
+                    row_key = f"{header_cols[first_col]} = {mentions[0].raw}"  # "max_depth = 8"
             for k, m in enumerate(mentions):
                 kinds, quals = set(m.kinds), set(m.qualifiers)
                 label = m.before.strip(" :=-|,\t")
-                if header_cols and len(mentions) >= 2:
-                    row_label = line[: mentions[0].start].strip()
+                if in_table:
                     col_i = len(header_cols) - len(mentions) + k
                     col = header_cols[col_i] if 0 <= col_i < len(header_cols) else ""
                     row_kinds = kinds_of_text(row_label)
-                    label = row_label if (row_kinds and k == 0) else f"{row_label} {col}"
-                    kinds = row_kinds if (row_kinds and k == 0) else kinds_of_text(f"{row_label} {col}")
-                    quals = qualifiers_of_tokens(tokenize(row_label))
+                    label = row_label if (row_kinds and k == 0) else f"{row_label} {col}".strip()
+                    kinds = row_kinds if (row_kinds and k == 0) else kinds_of_text(label)
+                    quals = qualifiers_of_tokens(tokenize(label))
                 elif is_shape:
                     label = f"{bare_label} {'rows' if k == 0 else 'columns'}"
                     kinds = {"count"} if k == 0 else {"features"}
@@ -156,7 +178,7 @@ def observations_for_cell(cell: Cell) -> List[Observation]:
                     k2, q2 = nearest_kinds(label, "")
                     kinds, quals = k2 or kinds, quals | q2
                 prev_label = label or prev_label
-                obs.append(_mk_obs(cell, m, label, line, kinds=kinds, quals=quals))
+                obs.append(_mk_obs(cell, m, label, line, kinds=kinds, quals=quals, row_key=row_key))
     return obs
 
 

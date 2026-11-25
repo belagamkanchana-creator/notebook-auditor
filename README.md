@@ -4,6 +4,21 @@
 
 **No install:** click the badge, run the three cells, and audit the built-in example or your own notebook (upload it or pick it from Google Drive).
 
+## What you get
+
+Give it a notebook. Optionally add the slides or paper you wrote from it. The report has three parts:
+
+1. **What your notebook found.** Findings drafted from the saved outputs: dataset size, class balance, final scores, trends across epochs or hyperparameters, overfitting, and which model or class is best and worst. Each finding links to its cell and gets a trust rating (✅ solid · ⚠️ at risk · ❔ unconfirmed · 👁️ read from a figure) plus caveats.
+2. **What's missing.** Next steps ranked by importance, each with code you can paste: fit preprocessing inside a Pipeline, add a majority baseline, repeat with seeds, report a confidence interval, check per-class results.
+3. **Claim checks.** If you add a write-up, every claim is traced to the cell that supports or contradicts it.
+
+Example from a real depth-sweep notebook:
+
+> **Overfitting:** training accuracy keeps improving to 0.9758, while test accuracy is best at 0.8227 (max_depth = 8) and then worsens to 0.7772.
+> ⚑ If the best setting was chosen by looking at test scores, that test score is optimistic; choose it on a validation split and report test once.
+
+With `--provider anthropic` (or **Use Claude** in Colab), Claude also reads the figures and drafts more findings. Its numbers must appear in the cell it cites, and its quotes must be verbatim; otherwise the finding is dropped. Each of its findings then goes through the same verifier as a slide claim.
+
 Audits a Jupyter/Colab notebook (`.ipynb`) and the slides, paper or summary written from it. It checks three things:
 
 - **Traceability:** whether every claim traces to a cell output.
@@ -70,12 +85,12 @@ API failures fall back to the heuristics and are listed under **Warnings** in th
 ```
 notebook-auditor run  -n NB [-s ARTIFACT ...] [-o DIR] [--provider auto|anthropic|openai|litellm|none]
                       [--model M] [--include-notebook-markdown] [--threshold-tolerance 0.005]
-                      [--format md|json|both] [--fail-on none|contradicted|risk|any]
+                      [--findings | --no-findings] [--format md|json|both] [--fail-on none|contradicted|risk|any]
 notebook-auditor parse  -n NB          # linear text view
 notebook-auditor claims -s ARTIFACT    # extracted claims as JSON
 ```
 
-With no `--slides`, claims are taken from the notebook's own markdown cells. `--fail-on` makes the exit code non-zero, which is useful in CI.
+With no `--slides`, findings mode is on and claims are taken from the notebook's own markdown cells. Use `--findings` to draft findings alongside a write-up check. `--fail-on` makes the exit code non-zero, which is useful in CI.
 
 **Cell numbering:** `Cell N` is the 1-based position in the notebook, markdown cells included.
 

@@ -46,7 +46,31 @@ def executor_user_prompt(claim: Dict[str, Any], cells_text: str) -> str:
     return f"CLAIM:\n{json.dumps(claim, ensure_ascii=False)}\n\nCELLS:\n{cells_text}"
 
 
-VERIFIER_SYSTEM = """You are the VERIFIER agent in a strict notebook audit. Decide whether the claim is backed by the
+FINDINGS_SYSTEM = """You are a careful research assistant reading a computational notebook: its code, saved outputs and figures.
+List the most important findings that the outputs and figures actually show, the way a researcher would write them
+in a results section.
+Rules:
+- One finding per item, as a single self-contained sentence. Name the metric, the split (train/validation/test) and
+  the model or setting it refers to.
+- Only state what printed outputs or figures show. Copy numbers exactly as printed; never compute or round new numbers.
+- cell_index is the cell whose output or figure shows the finding. quote is text copied character for character from
+  that cell's printed output (leave it empty for findings read off a figure).
+- kind is one of: "metric" (a printed score), "trend" (change across epochs, sizes or parameters), "comparison"
+  (models, classes or settings against each other), "data" (dataset size, class balance), "figure" (a pattern you read
+  from an image, e.g. a curve flattening, a confusion between two classes), or "interpretation" (what it might mean;
+  use this honestly whenever you go beyond what is shown).
+- Prefer what a researcher would care about: final scores, the best configuration, trends, overfitting, the hardest
+  class, surprising gaps, data imbalance. Skip trivial outputs.
+- At most 10 findings.
+Output: {"findings": [{"text": "...", "cell_index": 7, "quote": "...", "kind": "metric"}]}"""
+
+
+def findings_user_prompt(notebook_text: str, n_images: int) -> str:
+    figs = f"\n\n{n_images} figure image(s) are attached above, each labelled with its cell." if n_images else ""
+    return f"NOTEBOOK (cells with code and saved outputs):\n{notebook_text}{figs}"
+
+
+VERIFIER_SYSTEM ="""You are the VERIFIER agent in a strict notebook audit. Decide whether the claim is backed by the
 execution evidence. Apply these rules strictly:
 1. SUPPORTED only if a cited cell output or code line directly shows the claimed fact. Rounding of the last stated digit
    is allowed; changes in magnitude, unit, split (train vs test) or metric (accuracy vs F1) are not.
