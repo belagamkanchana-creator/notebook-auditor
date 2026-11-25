@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "notebook-auditor"
+version = "0.1.0"
+description = "LLM-assisted verification CLI that audits Jupyter notebooks and derived slides/papers for evidence traceability, claim-output discrepancies and methodological risks."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.0"]
+litellm = ["litellm>=1.0"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+notebook-auditor = "notebook_auditor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["notebook_auditor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
