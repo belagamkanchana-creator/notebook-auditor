@@ -72,7 +72,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             t = s["findings_by_trust"]
             print(f"  findings: {s['findings']} ({t['solid']} solid, {t['at_risk']} at risk, {t['unconfirmed'] + t['visual']} unconfirmed) · next steps: {s['gaps']}")
         print("  " + "  ".join(f"{VERDICT_ICON[v]} {v}: {s['verdicts'][v]}" for v in VERDICTS))
-        print("  findings: " + ", ".join(f"{k}={v}" for k, v in s["risks_by_severity"].items()))
+        print("  risk checks: " + ", ".join(f"{k}={v}" for k, v in s["risks_by_severity"].items()))
         for kind, path in paths.items():
             print(f"  wrote {path}")
     counts = result.summary()["verdicts"]
